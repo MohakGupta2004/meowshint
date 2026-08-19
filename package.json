@@ -1,0 +1,35 @@
+{
+  "name": "twtty",
+  "private": true,
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "lint": "turbo run lint",
+    "format": "prettier --write  \"**/*.{ts,tsx,js,jsx,json,md,mdx,css}\"",
+    "format:check": "prettier --check  \"**/*.{ts,tsx,js,jsx,json,md,mdx,css}\"",
+    "lint-staged": "lint-staged",
+    "prepare": "husky",
+    "check-types": "turbo run check-types",
+    "g": "bash scripts/generate-module.sh",
+    "generate": "bash scripts/generate-module.sh"
+  },
+  "devDependencies": {
+    "@repo/eslint-config": "workspace:*",
+    "@trivago/prettier-plugin-sort-imports": "^6.0.2",
+    "eslint": "^9",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.2.7",
+    "prettier": "^3.8.1",
+    "prettier-plugin-tailwindcss": "^0.7.2",
+    "turbo": "^2.6.3",
+    "typescript": "5.9.2"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "packageManager": "bun@1.3.4",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ]
+}
