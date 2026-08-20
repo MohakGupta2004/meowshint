@@ -1,4 +1,3 @@
-import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 
 import { env } from '../../config/env';
@@ -14,8 +13,6 @@ import type {
   TokenPayload,
   UserResponse,
 } from './types';
-
-const SALT_ROUNDS = 12;
 
 function parseDurationToMs(duration: string): number {
   const match = duration.match(/^(\d+)([smhd])$/);
@@ -51,7 +48,7 @@ export const authService = {
       throw new ConflictError('Email already registered');
     }
 
-    const passwordHash = await bcrypt.hash(input.password, SALT_ROUNDS);
+    const passwordHash = await Bun.password.hash(input.password);
 
     const user = await prisma.user.create({
       data: {
@@ -90,7 +87,7 @@ export const authService = {
       throw new UnauthorizedError('Invalid email or password');
     }
 
-    const validPassword = await bcrypt.compare(input.password, user.passwordHash);
+    const validPassword = await Bun.password.verify(input.password, user.passwordHash);
 
     if (!validPassword) {
       throw new UnauthorizedError('Invalid email or password');
@@ -196,13 +193,13 @@ export const authService = {
       throw new UnauthorizedError('User not found');
     }
 
-    const validPassword = await bcrypt.compare(input.currentPassword, user.passwordHash);
+    const validPassword = await Bun.password.verify(input.currentPassword, user.passwordHash);
 
     if (!validPassword) {
       throw new BadRequestError('Current password is incorrect');
     }
 
-    const newPasswordHash = await bcrypt.hash(input.newPassword, SALT_ROUNDS);
+    const newPasswordHash = await Bun.password.hash(input.newPassword);
 
     await prisma.user.update({
       where: { id: userId },

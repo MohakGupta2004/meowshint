@@ -15,6 +15,14 @@ const envSchema = z.object({
   JWT_REFRESH_SECRET: z.string().min(1).default('super-secret-refresh-key-change-in-production'),
   JWT_ACCESS_EXPIRES_IN: z.string().default('15m'),
   JWT_REFRESH_EXPIRES_IN: z.string().default('7d'),
+  // Scraping env vars (all optional, safe defaults)
+  GITHUB_TOKEN: z.string().optional(),
+  ENABLE_LINKEDIN_SCRAPER: z.coerce.boolean().default(false),
+  SCOUT_PROXY: z.string().optional(),
+  SCOUT_PROXY_FILE: z.string().optional(),
+  SCOUT_FREE_PROXY: z.string().optional(),
+  SCOUT_DELAY_MIN: z.coerce.number().int().optional(),
+  SCOUT_DELAY_MAX: z.coerce.number().int().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);

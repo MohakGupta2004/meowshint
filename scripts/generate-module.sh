@@ -2,7 +2,7 @@
 set -e
 
 # ==============================================================================
-# Module Generator Script for Express / TypeScript API
+# Module Generator Script for Elysia / TypeScript API
 # ==============================================================================
 # Usage:
 #   ./scripts/generate-module.sh <module-name> [output-directory]
@@ -17,7 +17,7 @@ RAW_NAME="$1"
 CUSTOM_TARGET_DIR="$2"
 
 if [ -z "$RAW_NAME" ]; then
-  echo "❌ Error: Module name is required."
+  echo "Error: Module name is required."
   echo "Usage: $0 <module-name> [output-directory]"
   echo "Example: $0 product"
   exit 1
@@ -49,7 +49,7 @@ else
 fi
 
 if [ -d "$MODULE_DIR" ]; then
-  echo "⚠️ Warning: Directory '$MODULE_DIR' already exists."
+  echo "Warning: Directory '$MODULE_DIR' already exists."
   read -p "Do you want to overwrite it? (y/N): " -n 1 -r
   echo
   if [[ ! $REPLY =~ ^[Yy]$ ]]; then
@@ -58,7 +58,7 @@ if [ -d "$MODULE_DIR" ]; then
   fi
 fi
 
-echo "🚀 Generating module '$MODULE_SLUG' in: $MODULE_DIR"
+echo "Generating module '$MODULE_SLUG' in: $MODULE_DIR"
 mkdir -p "$MODULE_DIR"
 
 # ------------------------------------------------------------------------------
@@ -66,20 +66,12 @@ mkdir -p "$MODULE_DIR"
 # ------------------------------------------------------------------------------
 cat <<EOF > "$MODULE_DIR/types.ts"
 import type { z } from 'zod';
-import type { ${CAMEL_CASE}IdParamSchema, create${PASCAL_CASE}Schema, list${PASCAL_CASE}QuerySchema, update${PASCAL_CASE}Schema } from './schema';
+import type { create${PASCAL_CASE}Schema, list${PASCAL_CASE}QuerySchema, update${PASCAL_CASE}Schema, ${CAMEL_CASE}IdParamSchema } from './schema';
 
 export type Create${PASCAL_CASE}Input = z.infer<typeof create${PASCAL_CASE}Schema>;
 export type Update${PASCAL_CASE}Input = z.infer<typeof update${PASCAL_CASE}Schema>;
 export type ${PASCAL_CASE}IdParam = z.infer<typeof ${CAMEL_CASE}IdParamSchema>;
 export type List${PASCAL_CASE}Query = z.infer<typeof list${PASCAL_CASE}QuerySchema>;
-
-export interface ${PASCAL_CASE}Response {
-  id: number;
-  title: string;
-  description?: string | null;
-  createdAt: Date;
-  updatedAt: Date;
-}
 EOF
 
 # ------------------------------------------------------------------------------
@@ -114,158 +106,167 @@ EOF
 # 3. service.ts (Business Logic)
 # ------------------------------------------------------------------------------
 cat <<EOF > "$MODULE_DIR/service.ts"
+import { prisma } from '../../lib/prisma';
 import { NotFoundError } from '../../errors';
-import type { Create${PASCAL_CASE}Input, List${PASCAL_CASE}Query, ${PASCAL_CASE}Response, Update${PASCAL_CASE}Input } from './types';
+import type { Create${PASCAL_CASE}Input, List${PASCAL_CASE}Query, Update${PASCAL_CASE}Input } from './types';
+
+const select = {
+  id: true,
+  title: true,
+  description: true,
+  createdAt: true,
+  updatedAt: true,
+};
 
 export const ${CAMEL_CASE}Service = {
-  /**
-   * List paginated items
-   */
   async list({ page, limit }: List${PASCAL_CASE}Query) {
-    // TODO: Implement database / business logic here
-    const items: ${PASCAL_CASE}Response[] = [];
-    const total = 0;
-
-    return {
-      items,
-      page,
-      limit,
-      total,
-      totalPages: Math.ceil(total / limit) || 1,
-    };
+    const [items, total] = await prisma.\$transaction([
+      prisma.${CAMEL_CASE}.findMany({
+        skip: (page - 1) * limit,
+        take: limit,
+        orderBy: { id: 'asc' },
+        select,
+      }),
+      prisma.${CAMEL_CASE}.count(),
+    ]);
+    return { items, page, limit, total, totalPages: Math.ceil(total / limit) };
   },
 
-  /**
-   * Get single item by ID
-   */
-  async get(id: number): Promise<${PASCAL_CASE}Response> {
-    // TODO: Implement database lookup
-    const item: ${PASCAL_CASE}Response | null = null;
-
-    if (!item) {
-      throw new NotFoundError('${PASCAL_CASE} not found');
-    }
-
+  async get(id: number) {
+    const item = await prisma.${CAMEL_CASE}.findUnique({
+      where: { id },
+      select,
+    });
+    if (!item) throw new NotFoundError('${PASCAL_CASE} not found');
     return item;
   },
 
-  /**
-   * Create new item
-   */
-  async create(data: Create${PASCAL_CASE}Input): Promise<${PASCAL_CASE}Response> {
-    // TODO: Implement business logic & database save
-    return {
-      id: Date.now(),
-      title: data.title,
-      description: data.description ?? null,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    };
+  async create(data: Create${PASCAL_CASE}Input) {
+    return prisma.${CAMEL_CASE}.create({
+      data: {
+        title: data.title.trim(),
+        description: data.description ?? null,
+      },
+      select,
+    });
   },
 
-  /**
-   * Update existing item
-   */
-  async update(id: number, data: Update${PASCAL_CASE}Input): Promise<${PASCAL_CASE}Response> {
-    const item = await this.get(id);
-
-    // TODO: Implement update business logic & database save
-    return {
-      ...item,
-      ...(data.title && { title: data.title }),
-      ...(data.description !== undefined && { description: data.description }),
-      updatedAt: new Date(),
-    };
-  },
-
-  /**
-   * Remove item by ID
-   */
-  async remove(id: number): Promise<void> {
+  async update(id: number, data: Update${PASCAL_CASE}Input) {
     await this.get(id);
-    // TODO: Implement database delete
+    return prisma.${CAMEL_CASE}.update({
+      where: { id },
+      data: {
+        ...(data.title && { title: data.title.trim() }),
+        ...(data.description !== undefined && { description: data.description }),
+      },
+      select,
+    });
+  },
+
+  async remove(id: number) {
+    await this.get(id);
+    await prisma.${CAMEL_CASE}.delete({ where: { id } });
   },
 };
 EOF
 
 # ------------------------------------------------------------------------------
-# 4. controller.ts (Clean Controller Abstraction)
+# 4. routes.ts (Elysia Routes with TypeBox validators)
 # ------------------------------------------------------------------------------
-cat <<EOF > "$MODULE_DIR/controller.ts"
-import type { Request, Response } from 'express';
-import { asyncHandler, ok } from '../../lib/http';
+cat <<EOF > "$MODULE_DIR/routes.ts"
+import { Elysia, t } from 'elysia';
+
 import { ${CAMEL_CASE}Service } from './service';
 import type { Create${PASCAL_CASE}Input, List${PASCAL_CASE}Query, Update${PASCAL_CASE}Input } from './types';
 
-export const ${CAMEL_CASE}Controller = {
-  list: asyncHandler(async (_req: Request, res: Response) => {
-    const query = res.locals.query as List${PASCAL_CASE}Query;
-    const { items, ...meta } = await ${CAMEL_CASE}Service.list(query);
-    ok(res, items, 200, meta);
-  }),
-
-  get: asyncHandler(async (req: Request, res: Response) => {
-    const id = Number(req.params.id);
-    const result = await ${CAMEL_CASE}Service.get(id);
-    ok(res, result, 200);
-  }),
-
-  create: asyncHandler(async (req: Request, res: Response) => {
-    const body = req.body as Create${PASCAL_CASE}Input;
-    const result = await ${CAMEL_CASE}Service.create(body);
-    ok(res, result, 201);
-  }),
-
-  update: asyncHandler(async (req: Request, res: Response) => {
-    const id = Number(req.params.id);
-    const body = req.body as Update${PASCAL_CASE}Input;
-    const result = await ${CAMEL_CASE}Service.update(id, body);
-    ok(res, result, 200);
-  }),
-
-  remove: asyncHandler(async (req: Request, res: Response) => {
-    const id = Number(req.params.id);
-    await ${CAMEL_CASE}Service.remove(id);
-    res.status(204).send();
-  }),
-};
+export const ${CAMEL_CASE}Routes = new Elysia({ prefix: '/${MODULE_SLUG}s' })
+  .get(
+    '/',
+    async ({ query }) => {
+      const { page = 1, limit = 20 } = query as List${PASCAL_CASE}Query;
+      const { items, ...meta } = await ${CAMEL_CASE}Service.list({ page, limit });
+      return { success: true, data: items, meta };
+    },
+    {
+      query: t.Object({
+        page: t.Optional(t.Number({ minimum: 1 })),
+        limit: t.Optional(t.Number({ minimum: 1, maximum: 100 })),
+      }),
+    }
+  )
+  .get(
+    '/:id',
+    async ({ params }) => {
+      const id = Number(params.id);
+      const item = await ${CAMEL_CASE}Service.get(id);
+      return { success: true, data: item };
+    },
+    {
+      params: t.Object({
+        id: t.Number({ minimum: 1 }),
+      }),
+    }
+  )
+  .post(
+    '/',
+    async ({ body }) => {
+      const result = await ${CAMEL_CASE}Service.create(body as Create${PASCAL_CASE}Input);
+      return { success: true, data: result };
+    },
+    {
+      body: t.Object({
+        title: t.String({ minLength: 1, maxLength: 120 }),
+        description: t.Optional(t.String()),
+      }),
+    }
+  )
+  .patch(
+    '/:id',
+    async ({ params, body }) => {
+      const id = Number(params.id);
+      const result = await ${CAMEL_CASE}Service.update(id, body as Update${PASCAL_CASE}Input);
+      return { success: true, data: result };
+    },
+    {
+      params: t.Object({
+        id: t.Number({ minimum: 1 }),
+      }),
+      body: t.Object({
+        title: t.Optional(t.String({ minLength: 1, maxLength: 120 })),
+        description: t.Optional(t.Nullable(t.String())),
+      }),
+    }
+  )
+  .delete(
+    '/:id',
+    async ({ params }) => {
+      const id = Number(params.id);
+      await ${CAMEL_CASE}Service.remove(id);
+      return new Response(null, { status: 204 });
+    },
+    {
+      params: t.Object({
+        id: t.Number({ minimum: 1 }),
+      }),
+    }
+  );
 EOF
 
 # ------------------------------------------------------------------------------
-# 5. routes.ts (Declarative Route Definitions)
-# ------------------------------------------------------------------------------
-cat <<EOF > "$MODULE_DIR/routes.ts"
-import { Router } from 'express';
-import { validate } from '../../middleware/validate';
-import { ${CAMEL_CASE}Controller } from './controller';
-import { ${CAMEL_CASE}IdParamSchema, create${PASCAL_CASE}Schema, list${PASCAL_CASE}QuerySchema, update${PASCAL_CASE}Schema } from './schema';
-
-export const ${CAMEL_CASE}Routes = Router();
-
-${CAMEL_CASE}Routes.get('/', validate({ query: list${PASCAL_CASE}QuerySchema }), ${CAMEL_CASE}Controller.list);
-${CAMEL_CASE}Routes.get('/:id', validate({ params: ${CAMEL_CASE}IdParamSchema }), ${CAMEL_CASE}Controller.get);
-${CAMEL_CASE}Routes.post('/', validate({ body: create${PASCAL_CASE}Schema }), ${CAMEL_CASE}Controller.create);
-${CAMEL_CASE}Routes.patch('/:id', validate({ params: ${CAMEL_CASE}IdParamSchema, body: update${PASCAL_CASE}Schema }), ${CAMEL_CASE}Controller.update);
-${CAMEL_CASE}Routes.delete('/:id', validate({ params: ${CAMEL_CASE}IdParamSchema }), ${CAMEL_CASE}Controller.remove);
-EOF
-
-# ------------------------------------------------------------------------------
-# 6. index.ts (Barrel Export)
+# 5. index.ts (Barrel Export)
 # ------------------------------------------------------------------------------
 cat <<EOF > "$MODULE_DIR/index.ts"
 export * from './types';
 export * from './schema';
 export * from './service';
-export * from './controller';
 export * from './routes';
 EOF
 
-echo "✨ Module '${MODULE_SLUG}' generated successfully!"
+echo "Module '${MODULE_SLUG}' generated successfully!"
 echo ""
-echo "Next step: Register '${CAMEL_CASE}Routes' in your express app (e.g. apps/api/src/app.ts):"
+echo "Next step: Register '${CAMEL_CASE}Routes' in your Elysia app (e.g. apps/api/src/app.ts):"
 echo "--------------------------------------------------------"
 echo "import { ${CAMEL_CASE}Routes } from './modules/${MODULE_SLUG}';"
 echo ""
-echo "api.use('/${MODULE_SLUG}s', ${CAMEL_CASE}Routes);"
+echo "app.use(${CAMEL_CASE}Routes);"
 echo "--------------------------------------------------------"
-

@@ -10,6 +10,7 @@
     "lint-staged": "lint-staged",
     "prepare": "husky",
     "check-types": "turbo run check-types",
+    "test": "turbo run test",
     "g": "bash scripts/generate-module.sh",
     "generate": "bash scripts/generate-module.sh"
   },

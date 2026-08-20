@@ -13,12 +13,12 @@
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
     "db:studio": "prisma studio",
+    "test": "bun test",
     "g": "bash ../../scripts/generate-module.sh",
     "generate": "bash ../../scripts/generate-module.sh"
   },
   "devDependencies": {
     "@repo/eslint-config": "workspace:*",
-    "@types/bcrypt": "^6.0.0",
     "@types/bun": "latest",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^26.1.2",
@@ -28,7 +28,7 @@
     "tsx": "^4.23.10"
   },
   "peerDependencies": {
-    "typescript": "^7.0.2"
+    "typescript": "^5.0.0"
   },
   "dependencies": {
     "@elysiajs/cookie": "^0.8.0",

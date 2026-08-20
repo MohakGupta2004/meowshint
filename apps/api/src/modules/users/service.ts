@@ -1,5 +1,3 @@
-import bcrypt from 'bcrypt';
-
 import { ConflictError, NotFoundError } from '../../errors';
 import { prisma } from '../../lib/prisma';
 import type { ListQuery } from './types';
@@ -38,7 +36,7 @@ export const usersService = {
 
   async create(data: { email: string; name?: string; password?: string }) {
     await this.ensureEmailFree(data.email);
-    const passwordHash = await bcrypt.hash(data.password ?? 'DefaultTempPass123!', 12);
+    const passwordHash = await Bun.password.hash(data.password ?? 'DefaultTempPass123!');
 
     return prisma.user.create({
       data: {

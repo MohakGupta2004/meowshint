@@ -54,6 +54,12 @@
       "sourceType": "github",
       "skillPath": "prisma-upgrade-v7/SKILL.md",
       "computedHash": "0e07dc2831f86cf27627df914db43d862b0fc75d72c1f9070434aab7940bad7c"
+    },
+    "write-unit-tests": {
+      "source": "tldraw/tldraw",
+      "sourceType": "github",
+      "skillPath": "skills/write-unit-tests/SKILL.md",
+      "computedHash": "478166dc23ebde191d49bceba15ef044e61457634302351f84a0ede00fdf8026"
     }
   }
 }
