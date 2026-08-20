@@ -1,16 +1,14 @@
 import { Elysia } from 'elysia';
 import { t } from 'elysia';
-import { get } from 'http';
 
 import { authMiddleware } from '../../middleware/auth';
 import { usersService } from './service';
-import type { CreateUserInput, ListQuery, UpdateUserInput } from './types';
 
 export const userRoutes = new Elysia({ prefix: '/users' })
   .get(
     '/',
     async ({ query }) => {
-      const { page = 1, limit = 20 } = query as ListQuery;
+      const { page = 1, limit = 20 } = query;
       const { items, ...meta } = await usersService.list({ page, limit });
       return { success: true, data: items, meta };
     },
@@ -44,7 +42,7 @@ export const userRoutes = new Elysia({ prefix: '/users' })
         .post(
           '/',
           async ({ body }) => {
-            const result = await usersService.create(body as CreateUserInput);
+            const result = await usersService.create(body);
             return { success: true, data: result };
           },
           {
@@ -58,7 +56,7 @@ export const userRoutes = new Elysia({ prefix: '/users' })
           '/:id',
           async ({ params, body }) => {
             const id = Number(params.id);
-            const result = await usersService.update(id, body as UpdateUserInput);
+            const result = await usersService.update(id, body);
             return { success: true, data: result };
           },
           {

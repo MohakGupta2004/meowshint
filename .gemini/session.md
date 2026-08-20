@@ -9,7 +9,8 @@ This file tracks the concepts learned, codebase structure explored, and modifica
 ### 1. Schema Validation (`t` vs `Zod`)
 
 - **Concept:** Instead of using Express validation libraries like `Zod` or `Joi`, Elysia comes with its own high-performance, compile-time validation builder named `t`.
-- **Usage:** `t.Object()`, `t.String()`, and `t.Number()` define the expected shapes of the `body`, `query`, and `params` directly inside the route options object.
+- **Dual Validation Pattern:** The codebase uses Zod for the internal database/service layers, and Elysia's `t` builder for HTTP-level endpoint validation.
+- **Type Inference:** Elysia automatically infers types from the `t.Object(...)` schema. Explicit type casting (like `as ListQuery` or `as CreateUserInput`) is redundant in route handlers.
 
 ### 2. Middleware via Lifecycle Hooks
 
@@ -45,9 +46,10 @@ This file tracks the concepts learned, codebase structure explored, and modifica
 
 - **Action:** Extracted cookie-setting functions and authentication verification logic from `routes.ts` into a new `utils.ts` file to keep the route definitions clean and readable.
 
-### 2. Secured User Routes (`apps/api/src/modules/users/routes.ts`)
+### 2. Secured & Cleaned User Routes (`apps/api/src/modules/users/routes.ts`)
 
 - **Action:** Imported `authMiddleware` and integrated it using `.derive()`.
 - **Action:** Wrapped state-changing endpoints inside a `.guard()` block so that:
   - `GET /users` is **public** (unauthenticated).
   - `GET /users/:id`, `POST /`, `PATCH /:id`, and `DELETE /:id` are **private** and require a valid token.
+- **Action:** Removed redundant type assertions (`as ListQuery`, `as CreateUserInput`, `as UpdateUserInput`) and cleaned up unused imports since Elysia automatically infers parameter types from route validation schemas.

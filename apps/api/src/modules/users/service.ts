@@ -1,6 +1,5 @@
 import { ConflictError, NotFoundError } from '../../errors';
 import { prisma } from '../../lib/prisma';
-import type { ListQuery } from './types';
 
 const userSelect = {
   id: true,
@@ -12,7 +11,7 @@ const userSelect = {
 };
 
 export const usersService = {
-  async list({ page, limit }: ListQuery) {
+  async list({ page, limit }: { page: number; limit: number }) {
     const [items, total] = await prisma.$transaction([
       prisma.user.findMany({
         skip: (page - 1) * limit,
