@@ -1,7 +1,5 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Get a free hosted Postgres database in seconds: `npx create-db`
+// OSINT Core — Prisma schema
+// Manages OSINT sessions, scraping tasks, credit tracking, and report generation
 
 generator client {
   provider = "prisma-client"
@@ -12,16 +10,92 @@ datasource db {
   provider = "postgresql"
 }
 
-model User { 
-  id            Int            @id @default(autoincrement()) 
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+// OSINT session lifecycle: starts in DISAMBIGUATION (user picking the right person),
+// moves to ENRICHING (scrapes running), then COMPLETED / PARTIAL / FAILED / CLOSED
+enum SessionStatus {
+  DISAMBIGUATION
+  ENRICHING
+  COMPLETED
+  PARTIAL
+  FAILED
+  CLOSED
+}
+
+// Per-task state within a session — each platform scrape gets its own task row
+enum TaskStatus {
+  PENDING
+  RUNNING
+  FOUND
+  NOT_FOUND
+  FAILED
+  SKIPPED
+}
+
+// Supported scraping targets — new platforms added here only, no schema changes
+enum Platform {
+  WEB_SEARCH
+  INSTAGRAM
+  LINKEDIN
+  GITHUB
+  TWITCH
+  YOUTUBE
+  TIKTOK
+  PINTEREST
+  LINKTREE
+}
+
+// Credit ledger transaction types — GRANT = admin top-up, SCRAPE = platform charge,
+// WEB_SEARCH = search charge, PREMIUM_QUERY = paid lookup, REFUND = failed-task rebate
+enum CreditKind {
+  GRANT
+  SCRAPE
+  WEB_SEARCH
+  PREMIUM_QUERY
+  REFUND
+  ADJUSTMENT
+}
+
+// Report output formats — PDF included from day one (MD→PDF is just a render step)
+enum ReportFormat {
+  MD
+  CSV
+  PDF
+}
+
+// ---------------------------------------------------------------------------
+// User (Agent) — the person running OSINT sessions
+// ---------------------------------------------------------------------------
+
+model User {
+  id            Int            @id @default(autoincrement())
   email         String         @unique
   name          String?
   passwordHash  String
   role          String         @default("USER")
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
+
+  // Fast-read denormalized balance — source of truth is CreditTransaction ledger
+  creditBalance Int            @default(0)
+
+  // TOTP-based MFA fields — landing now to avoid a second migration later
+  mfaEnabled     Boolean       @default(false)
+  mfaSecret      String?
+  mfaVerifiedAt  DateTime?
+  mfaBackupCodes String[]
+
   refreshTokens RefreshToken[]
-} 
+  sessions      OsintSession[]
+  creditTxns    CreditTransaction[]
+}
+
+// ---------------------------------------------------------------------------
+// RefreshToken — standard JWT refresh token storage
+// ---------------------------------------------------------------------------
 
 model RefreshToken {
   id              String    @id @default(uuid())
@@ -36,3 +110,256 @@ model RefreshToken {
   @@index([userId])
 }
 
+// ---------------------------------------------------------------------------
+// OsintSession — one session = one person being investigated
+// ---------------------------------------------------------------------------
+
+// Tracks the full lifecycle of an OSINT investigation for a single target person.
+// The agent types a name → web search returns candidates → agent picks one →
+// per-platform scrapes run → results accumulate → report exported.
+// Sessions are immutable once closed (lockedAt != null).
+model OsintSession {
+  id                  String        @id @default(uuid())
+  agentId             Int
+  query               String        // raw name typed into the search box
+  queryContext        String?       // optional hints: "works at Acme, Berlin"
+  status              SessionStatus @default(DISAMBIGUATION)
+  selectedCandidateId String?       @unique
+
+  // Which platforms were requested for scraping in this session
+  platforms           Platform[]
+
+  // Denormalized counters — read without aggregating task rows
+  totalTasks          Int           @default(0)
+  completedTasks      Int           @default(0)
+  failedTasks         Int           @default(0)
+  creditsSpent        Int           @default(0) // SUM of CreditTransaction.amount for this session
+
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+  closedAt            DateTime?
+  lockedAt            DateTime?     // set on close; service rejects all writes when set
+
+  agent               User          @relation(fields: [agentId], references: [id])
+  candidates          Candidate[]   @relation("SessionCandidates")
+  selectedCandidate   Candidate?    @relation("SelectedCandidate", fields: [selectedCandidateId], references: [id])
+  targetProfile       TargetProfile?
+  tasks               SessionTask[]
+  creditTxns          CreditTransaction[]
+  reports             Report[]
+
+  @@index([agentId, createdAt])
+  @@index([status])
+}
+
+// ---------------------------------------------------------------------------
+// Candidate — disambiguation results from web search
+// ---------------------------------------------------------------------------
+
+// When the agent types "John Smith", the web search returns multiple candidates.
+// This table holds them so the agent can pick the right one before scrapes run.
+// Session stays in DISAMBIGUATION until exactly one candidate is selected.
+model Candidate {
+  id          String   @id @default(uuid())
+  sessionId   String
+  displayName String
+  snippet     String?  // search result snippet describing this person
+  sourceUrl   String?  // original search result URL
+  location    String?  // extracted location hint
+  handles     Json?    // {instagram:"jsmith", linkedin:"john-smith-1a2b"} — known usernames
+  score       Float?   // 0..1 confidence from the search engine
+  rank        Int      // ordering from search results
+  selected    Boolean  @default(false) // true for the one picked by the agent
+  createdAt   DateTime @default(now())
+
+  session     OsintSession  @relation("SessionCandidates", fields: [sessionId], references: [id], onDelete: Cascade)
+  selectedBy  OsintSession? @relation("SelectedCandidate")
+
+  @@index([sessionId])
+}
+
+// ---------------------------------------------------------------------------
+// TargetProfile — consolidated person data after enrichment finishes
+// ---------------------------------------------------------------------------
+
+// Aggregated profile built from all platform results once enrichment completes.
+// Session-scoped (not global) to preserve REQ-102 immutability — a new session
+// creates its own TargetProfile, never mutates a previous one.
+model TargetProfile {
+  id                     String   @id @default(uuid())
+  sessionId              String   @unique
+  legalName              String
+  knownAliases           String[]
+  primaryEmail           String?
+  emails                 String[]
+  associatedPhoneNumbers String[]
+  locationLabel          String?
+  latitude               Float?
+  longitude              Float?
+  avatarImageArchive     Json?    // [{platform, url, capturedAt}] — avatar snapshots
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  session                OsintSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+}
+
+// ---------------------------------------------------------------------------
+// SessionTask — per-platform orchestration row
+// ---------------------------------------------------------------------------
+
+// One row per (session, platform). Tracks scrape progress, retries, credits,
+// and errors. "Is this session done?" reads from here alone — no LEFT JOINs
+// across result tables.
+model SessionTask {
+  id           String     @id @default(uuid())
+  sessionId    String
+  platform     Platform
+  status       TaskStatus @default(PENDING)
+  creditCost   Int        @default(0) // credits charged for this task
+  attempts     Int        @default(0) // retry count
+  errorCode    String?    // maps to shared error classes
+  errorMessage String?
+  queuedAt     DateTime   @default(now())
+  startedAt    DateTime?
+  finishedAt   DateTime?
+
+  session      OsintSession       @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  webResult    WebSearchResult?
+  igResult     InstagramResult?
+  liResult     LinkedInResult?
+  socialResult SocialProfileResult?
+  creditTxns   CreditTransaction[]
+
+  @@unique([sessionId, platform])
+  @@index([status])
+}
+
+// ---------------------------------------------------------------------------
+// Result tables — 1:1 with SessionTask, typed per platform
+// ---------------------------------------------------------------------------
+
+// Web search results — search engine hits and discovered social handles
+model WebSearchResult {
+  taskId            String @unique
+  query             String // the search query that produced these results
+  engine            String? // search engine used (google, bing, etc.)
+  totalResults      Int?    // total result count from the engine
+  results           Json    // [{title, url, snippet}] — individual search hits
+  discoveredHandles Json?   // social media usernames found in search results
+  summaryText       String? // rendered straight into the report
+
+  task              SessionTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+}
+
+// Instagram profile data — followers, posts, bio, extracted contact info
+model InstagramResult {
+  taskId          String   @unique
+  username        String
+  fullName        String?
+  biography       String?
+  followers       Int?
+  following       Int?
+  postCount       Int?
+  isPrivate       Boolean  @default(false)
+  isVerified      Boolean  @default(false)
+  avatarUrl       String?
+  externalUrl     String?
+  extractedEmails String[] // emails found in bio/link-in-bio
+  extractedPhones String[] // phone numbers found in bio
+  summaryText     String?  // rendered into the report
+  raw             Json?    // full API response for re-rendering
+
+  task            SessionTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+}
+
+// LinkedIn profile data — employment history, education, skills
+model LinkedInResult {
+  taskId         String   @unique
+  publicId       String   // LinkedIn public profile ID
+  fullName       String?
+  headline       String?  // e.g. "Senior Engineer at Acme"
+  currentCompany String?
+  currentTitle   String?
+  location       String?
+  about          String?  // "About" section text
+  experience     Json?    // [{title, company, duration, description}]
+  education      Json?    // [{school, degree, field, dates}]
+  skills         String[]
+  connections    Int?
+  avatarUrl      String?
+  summaryText    String?  // rendered into the report
+  raw            Json?    // full API response for re-rendering
+
+  task           SessionTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+}
+
+// Social profiles for platforms with similar shapes: GitHub, Twitch, YouTube,
+// TikTok, Pinterest, Linktree. Split into dedicated tables later if fields diverge.
+model SocialProfileResult {
+  taskId      String   @unique
+  platform    Platform // which platform this result is for
+  username    String
+  displayName String?
+  bio         String?
+  followers   Int?
+  following   Int?
+  itemCount   Int?     // repos / videos / pins — platform-dependent count
+  avatarUrl   String?
+  profileUrl  String?  // direct link to the profile
+  socials     Json?    // cross-links extracted from the profile
+  summaryText String?  // rendered into the report
+  raw         Json?    // full API response for re-rendering
+
+  task        SessionTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+}
+
+// ---------------------------------------------------------------------------
+// CreditTransaction — immutable ledger of all credit movements
+// ---------------------------------------------------------------------------
+
+// Source of truth for agent credit balance. Every debit, grant, and refund is a row.
+// User.creditBalance is a denormalized fast-read cache kept in sync via $transaction.
+// Negative amount = debit, positive = grant/refund.
+model CreditTransaction {
+  id           String      @id @default(uuid())
+  agentId      Int
+  sessionId    String?     // null for admin grants/adjustments not tied to a session
+  taskId       String?     // null for session-level charges
+  amount       Int         // negative = debit, positive = grant/refund
+  kind         CreditKind
+  platform     Platform?   // which platform was charged (SCRAPE/WEB_SEARCH only)
+  reason       String?     // human-readable note: "Instagram scrape", "Admin top-up"
+  balanceAfter Int         // User.creditBalance snapshot after this transaction
+  createdAt    DateTime    @default(now())
+
+  agent        User          @relation(fields: [agentId], references: [id])
+  session      OsintSession? @relation(fields: [sessionId], references: [id])
+  task         SessionTask?  @relation(fields: [taskId], references: [id])
+
+  @@index([agentId, createdAt])
+  @@index([sessionId])
+}
+
+// ---------------------------------------------------------------------------
+// Report — cached export files for completed sessions
+// ---------------------------------------------------------------------------
+
+// Generated on demand when the agent downloads a report. Cached after first
+// generation — subsequent downloads serve from filePath. Renderer walks
+// SessionTask rows, joins each to its result table, and emits MD sections
+// or one pivoted CSV row.
+model Report {
+  id          String       @id @default(uuid())
+  sessionId   String
+  format      ReportFormat
+  filePath    String?      // server-side path to cached file
+  content     String?      // inline content for small reports
+  checksum    String?      // SHA-256 for integrity verification
+  sizeBytes   Int?
+  generatedAt DateTime     @default(now())
+  expiresAt   DateTime?    // optional TTL for cache cleanup
+
+  session     OsintSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, format])
+}

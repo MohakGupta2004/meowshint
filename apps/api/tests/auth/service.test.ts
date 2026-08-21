@@ -3,34 +3,14 @@ import { mock } from 'bun:test';
 
 import { prisma } from '../../src/lib/prisma';
 import { authService } from '../../src/modules/auth/service';
+import { makePrismaMock } from '../helpers/prisma-mock';
 
 process.env.DATABASE_URL = 'postgresql://test:test@localhost:5432/test';
 process.env.REDIS_URL = 'redis://localhost:6379';
 
 mock.module('../../src/lib/prisma', () => {
-  const prismaMock = {
-    user: {
-      findUnique: mock(),
-      findMany: mock(),
-      create: mock(),
-      update: mock(),
-      count: mock(),
-      delete: mock(),
-    },
-    refreshToken: {
-      findUnique: mock(),
-      create: mock(),
-      update: mock(),
-      updateMany: mock(),
-    },
-    $transaction: mock(),
-  };
-
-  return {
-    prisma: prismaMock,
-    connectDatabase: mock(),
-    disconnectDatabase: mock(),
-  };
+  const prismaMock = makePrismaMock();
+  return { prisma: prismaMock, connectDatabase: mock(), disconnectDatabase: mock() };
 });
 
 describe('authService', () => {

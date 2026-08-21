@@ -45,3 +45,17 @@ export class ValidationError extends AppError {
     super(422, 'VALIDATION_ERROR', message, details);
   }
 }
+
+// Agent doesn't have enough credits to perform the requested operation
+export class InsufficientCreditsError extends AppError {
+  constructor(message = 'Insufficient credits') {
+    super(402, 'INSUFFICIENT_CREDITS', message);
+  }
+}
+
+// Session is locked (closed) — all writes rejected to preserve immutability
+export class SessionLockedError extends AppError {
+  constructor(message = 'Session is locked') {
+    super(409, 'SESSION_LOCKED', message);
+  }
+}

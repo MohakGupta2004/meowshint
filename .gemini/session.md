@@ -53,3 +53,25 @@ This file tracks the concepts learned, codebase structure explored, and modifica
   - `GET /users` is **public** (unauthenticated).
   - `GET /users/:id`, `POST /`, `PATCH /:id`, and `DELETE /:id` are **private** and require a valid token.
 - **Action:** Removed redundant type assertions (`as ListQuery`, `as CreateUserInput`, `as UpdateUserInput`) and cleaned up unused imports since Elysia automatically infers parameter types from route validation schemas.
+
+---
+
+## 🗄️ Database & Concurrency Concepts Learned
+
+### 1. Database-Level Locking (Mutex) via `FOR UPDATE`
+
+- **Concept:** When dealing with account balances or finite resources, standard read-then-write patterns (`findUnique` followed by `update`) are vulnerable to race conditions (dirty reads / lost updates) if multiple requests hit concurrently.
+- **Implementation:** Using raw PostgreSQL `FOR UPDATE` locks the specific user row in the transaction, queueing subsequent credit deduction/refund requests.
+
+### 2. Disambiguation State Machine
+
+- **Concept:** OSINT searches first return a set of candidates (`DISAMBIGUATION` status). Scrapes are held back until the user confirms the precise candidate to prevent credit wastage and incorrect profile enrichment.
+
+### 3. Credit Transaction Ledger
+
+- **Concept:** Credit balances use an audit-safe ledger pattern (`CreditTransaction` model). `User.creditBalance` serves as a denormalized fast-read cache updated in sync inside transaction blocks (`$transaction`) alongside ledger writes.
+
+### 4. Report Caching & Header Consistency
+
+- **Concept:** Reports are generated on-demand and cached in `Report` with a `checksum` (SHA-256) to save CPU and storage.
+- **CSV Header Consistency:** Using static headers (`PLATFORM_COLUMNS`) ensures the CSV structure remains predictable (no shifting columns), preventing failures in automated downstream client integrations.
