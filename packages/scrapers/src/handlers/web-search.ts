@@ -25,12 +25,16 @@ export function createWebSearchScraper(searchEngine: SearchEngine): ScraperHandl
     const discoveredHandles = discoverHandles(allUrls);
 
     const cap = deps.config.maxCandidates;
-    const candidates: CandidateDraft[] = results.slice(0, cap).map((r, i) => ({
-      displayName: r.title,
-      snippet: r.snippet,
-      sourceUrl: r.url,
-      rank: i,
-    }));
+    const candidates: CandidateDraft[] = results.slice(0, cap).map((r, i) => {
+      const handles = discoverHandles([r.url]);
+      return {
+        displayName: r.title,
+        snippet: r.snippet,
+        sourceUrl: r.url,
+        rank: i,
+        handles: Object.keys(handles).length > 0 ? (handles as Record<string, string>) : undefined,
+      };
+    });
 
     return {
       status: 'FOUND',

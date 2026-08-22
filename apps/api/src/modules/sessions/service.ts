@@ -5,6 +5,7 @@ import type { JobData } from '../../worker/contracts';
 import { creditsService } from '../credits/service';
 import { dispatchTasks } from './dispatch';
 import { mapResult } from './result-mapping';
+import { taskRunner } from './task-runner';
 
 // Type for Prisma transaction client (subset of PrismaClient)
 type TransactionClient = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
@@ -48,7 +49,7 @@ export const sessionsService = {
       });
 
       // Create the WEB_SEARCH task row
-      await tx.sessionTask.create({
+      const task = await tx.sessionTask.create({
         data: {
           sessionId: sess.id,
           platform: 'WEB_SEARCH',
@@ -56,15 +57,15 @@ export const sessionsService = {
         },
       });
 
-      return sess;
+      return { sess, task };
     });
 
     // S32: dispatch after the transaction commits
     await dispatchTasks([
       {
         schemaVersion: 1,
-        sessionId: session.id,
-        taskId: `web-search-${session.id}`,
+        sessionId: session.sess.id,
+        taskId: session.task.id,
         agentId,
         enqueuedAt: new Date().toISOString(),
         kind: 'WEB_SEARCH',
@@ -73,7 +74,7 @@ export const sessionsService = {
       },
     ]);
 
-    return session;
+    return session.sess;
   },
 
   // Get a single session by ID — verifies the agent owns it
@@ -164,17 +165,41 @@ export const sessionsService = {
             where: { sessionId, status: 'PENDING', platform: { not: 'WEB_SEARCH' } },
           })) ?? [];
         if (tasks.length > 0) {
-          const jobData: JobData[] = tasks.map((t) => ({
-            schemaVersion: 1,
-            sessionId: t.sessionId,
-            taskId: t.id,
-            agentId,
-            enqueuedAt: new Date().toISOString(),
-            kind: 'SCRAPE' as const,
-            platform: t.platform as any,
-            target: { displayName: session.query },
-          }));
-          await dispatchTasks(jobData);
+          // Handles come from web-search.ts's per-candidate discoverHandles() call,
+          // persisted on Candidate.handles — not re-derived from sourceUrl (a single
+          // URL only ever yields one platform's handle).
+          const handles = (candidate.handles as Record<string, string> | null) ?? {};
+
+          const dispatchable: (typeof tasks)[number][] = [];
+          const noHandle: (typeof tasks)[number][] = [];
+          for (const t of tasks) {
+            if (handles[t.platform]) dispatchable.push(t);
+            else noHandle.push(t);
+          }
+
+          await Promise.all(
+            noHandle.map((t) =>
+              taskRunner.skipUnclaimed(
+                t.id,
+                'NO_HANDLE',
+                `No ${t.platform} handle discovered for this candidate`
+              )
+            )
+          );
+
+          if (dispatchable.length > 0) {
+            const jobData: JobData[] = dispatchable.map((t) => ({
+              schemaVersion: 1,
+              sessionId: t.sessionId,
+              taskId: t.id,
+              agentId,
+              enqueuedAt: new Date().toISOString(),
+              kind: 'SCRAPE' as const,
+              platform: t.platform as any,
+              target: { displayName: session.query, handle: handles[t.platform] },
+            }));
+            await dispatchTasks(jobData);
+          }
         }
         return updated;
       });

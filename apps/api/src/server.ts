@@ -3,6 +3,8 @@ import { env } from './config/env';
 import { logger } from './lib/logger';
 import { connectDatabase, disconnectDatabase } from './lib/prisma';
 import { connectRedis, disconnectRedis } from './lib/redis';
+import { closeWorkers, startWorkers } from './worker';
+import { closeQueues } from './worker/queue';
 
 async function bootstrap(): Promise<void> {
   await connectDatabase();
@@ -12,6 +14,10 @@ async function bootstrap(): Promise<void> {
   app.listen(env.PORT, () => {
     logger.info(`Server started and listening on port ${env.PORT} (${env.NODE_ENV})`);
   });
+
+  if (env.RUN_WORKER) {
+    await startWorkers();
+  }
 
   registerShutdownHandlers();
 }
@@ -30,6 +36,7 @@ function registerShutdownHandlers(): void {
     }, env.SHUTDOWN_TIMEOUT_MS).unref();
 
     try {
+      await Promise.allSettled([closeWorkers(), closeQueues()]);
       await Promise.allSettled([disconnectDatabase(), disconnectRedis()]);
       clearTimeout(forceExit);
       logger.info('Shutdown complete');

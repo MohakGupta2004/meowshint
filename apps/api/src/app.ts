@@ -1,4 +1,3 @@
-import { cookie } from '@elysiajs/cookie';
 import { cors } from '@elysiajs/cors';
 import { Elysia } from 'elysia';
 
@@ -19,7 +18,6 @@ export function createApp() {
         credentials: true,
       })
     )
-    .use(cookie())
     .onError(errorHandler)
     .onRequest(({ request }) => {
       // Add request ID for logging

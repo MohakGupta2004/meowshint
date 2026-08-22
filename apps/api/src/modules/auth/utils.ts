@@ -1,44 +1,44 @@
 import { isProduction } from '../../config/env';
 import { authService } from './service';
 
-export function setAuthCookies(set: any, accessToken: string, refreshToken: string) {
-  set.cookie['accessToken'] = {
+export function setAuthCookies(cookie: any, accessToken: string, refreshToken: string) {
+  cookie.accessToken.set({
     value: accessToken,
     httpOnly: true,
     secure: isProduction,
     sameSite: 'lax',
     path: '/',
-    maxAge: 15 * 60 * 1000,
-  };
+    maxAge: 15 * 60,
+  });
 
-  set.cookie['refreshToken'] = {
+  cookie.refreshToken.set({
     value: refreshToken,
     httpOnly: true,
     secure: isProduction,
     sameSite: 'lax',
     path: '/',
-    maxAge: 7 * 24 * 60 * 60 * 1000,
-  };
+    maxAge: 7 * 24 * 60 * 60,
+  });
 }
 
-export function clearAuthCookies(set: any) {
-  set.cookie['accessToken'] = {
+export function clearAuthCookies(cookie: any) {
+  cookie.accessToken.set({
     value: '',
     httpOnly: true,
     secure: isProduction,
     sameSite: 'lax',
     path: '/',
     maxAge: 0,
-  };
+  });
 
-  set.cookie['refreshToken'] = {
+  cookie.refreshToken.set({
     value: '',
     httpOnly: true,
     secure: isProduction,
     sameSite: 'lax',
     path: '/',
     maxAge: 0,
-  };
+  });
 }
 
 export function verifyAuth({ cookie, headers }: { cookie: any; headers: any }): number | Response {

@@ -39,6 +39,7 @@ const envSchema = z.object({
   SCOUT_DELAY_MAX: z.coerce.number().int().optional(),
   SCOUT_HTTP_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
   SCOUT_MAX_CANDIDATES: z.coerce.number().int().positive().default(10),
+  SEARXNG_URL: z.string().default('http://localhost:8080'),
   // Process topology — both true by default (single deploy unit); split later
   // by setting one false on each instance.
   RUN_API: booleanEnv(true),

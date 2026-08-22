@@ -207,6 +207,28 @@ export const taskRunner = {
     });
   },
 
+  // Skip a task that was never claimed/charged (e.g. no resolvable handle at
+  // dispatch time) — never enqueued, so no refund is needed.
+  async skipUnclaimed(taskId: string, errorCode: string, reason: string): Promise<void> {
+    await prisma.$transaction(async (tx: TransactionClient) => {
+      const task = await tx.sessionTask.findUniqueOrThrow({
+        where: { id: taskId },
+        include: { session: true },
+      });
+      if (task.session.lockedAt) return;
+
+      const moved = await tx.sessionTask.updateMany({
+        where: { id: taskId, status: 'PENDING' },
+        data: { status: 'SKIPPED', errorCode, errorMessage: reason, finishedAt: new Date() },
+      });
+      if (moved.count === 0) return;
+
+      if (task.session.status === 'ENRICHING') {
+        await sessionsService.checkSessionCompletion(tx, task.sessionId);
+      }
+    });
+  },
+
   // Non-final-attempt retry: return the task to PENDING, no refund (it will be
   // re-claimed and re-run — the chargedAt guard prevents a double charge).
   async release(taskId: string, errorCode: string, errorMessage: string): Promise<void> {

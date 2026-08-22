@@ -6,7 +6,13 @@ import { buildQueueSpecs, getSpec, routeJob } from './queue-specs';
 
 const queues = new Map<string, Queue>();
 
-function createConnectionOptions() {
+// BullMQ v6 rejects ':' in queue names (queue-specs.ts names them 'scout:x' for
+// readability/routing) — sanitize only at the BullMQ construction boundary.
+export function bullmqName(name: string): string {
+  return name.replace(/:/g, '.');
+}
+
+export function createConnectionOptions() {
   const url = new URL(env.REDIS_URL);
   return {
     host: url.hostname,
@@ -23,7 +29,7 @@ export function getQueue(name: string): Queue {
   if (queue) return queue;
 
   const spec = getSpec(name);
-  queue = new Queue(name, {
+  queue = new Queue(bullmqName(name), {
     connection: createConnectionOptions(),
     defaultJobOptions: {
       attempts: spec.attempts,

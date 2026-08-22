@@ -12,7 +12,9 @@ const txMock: any = {
   sessionTask: {
     createMany: mock(),
     update: mock(),
+    updateMany: mock(async () => ({ count: 1 })),
     findUnique: mock(),
+    findUniqueOrThrow: mock(),
     findMany: mock(),
     create: mock(),
   },
@@ -153,7 +155,9 @@ describe('sessionsService', () => {
         makeSession({
           status: 'DISAMBIGUATION',
           lockedAt: new Date('2024-01-02'),
-          candidates: [{ id: 'c1', selected: false }],
+          candidates: [
+            { id: 'c1', selected: false, handles: { INSTAGRAM: 'jdoe', GITHUB: 'jdoe' } },
+          ],
         })
       );
       await expect(sessionsService.selectCandidate('session-1', 'c1', 1)).rejects.toThrow(
@@ -167,7 +171,9 @@ describe('sessionsService', () => {
         makeSession({
           status: 'DISAMBIGUATION',
           platforms: ['WEB_SEARCH', 'INSTAGRAM', 'GITHUB'],
-          candidates: [{ id: 'c1', selected: false }],
+          candidates: [
+            { id: 'c1', selected: false, handles: { INSTAGRAM: 'jdoe', GITHUB: 'jdoe' } },
+          ],
         })
       );
       await sessionsService.selectCandidate('session-1', 'c1', 1);
@@ -186,7 +192,9 @@ describe('sessionsService', () => {
         makeSession({
           status: 'DISAMBIGUATION',
           platforms: ['WEB_SEARCH', 'INSTAGRAM', 'GITHUB'],
-          candidates: [{ id: 'c1', selected: false }],
+          candidates: [
+            { id: 'c1', selected: false, handles: { INSTAGRAM: 'jdoe', GITHUB: 'jdoe' } },
+          ],
         })
       );
       await sessionsService.selectCandidate('session-1', 'c1', 1);
@@ -583,7 +591,9 @@ describe('sessionsService', () => {
         makeSession({
           status: 'DISAMBIGUATION',
           platforms: ['WEB_SEARCH', 'INSTAGRAM', 'GITHUB'],
-          candidates: [{ id: 'c1', selected: false }],
+          candidates: [
+            { id: 'c1', selected: false, handles: { INSTAGRAM: 'jdoe', GITHUB: 'jdoe' } },
+          ],
         })
       );
       (txMock.sessionTask.findMany as any).mockResolvedValue([
@@ -606,7 +616,9 @@ describe('sessionsService', () => {
         makeSession({
           status: 'DISAMBIGUATION',
           platforms: ['WEB_SEARCH', 'INSTAGRAM', 'GITHUB'],
-          candidates: [{ id: 'c1', selected: false }],
+          candidates: [
+            { id: 'c1', selected: false, handles: { INSTAGRAM: 'jdoe', GITHUB: 'jdoe' } },
+          ],
         })
       );
       (txMock.sessionTask.findMany as any).mockResolvedValue([
@@ -627,6 +639,93 @@ describe('sessionsService', () => {
       expect(platforms).not.toContain('WEB_SEARCH');
       expect(platforms).toContain('INSTAGRAM');
       expect(platforms).toContain('GITHUB');
+    });
+  });
+
+  describe('selectCandidate() — NO_HANDLE skip (S37–S39)', () => {
+    it('S37: a platform with no discovered handle is skipped, not dispatched', async () => {
+      (prisma.osintSession.findFirst as any).mockResolvedValue(
+        makeSession({
+          status: 'DISAMBIGUATION',
+          platforms: ['WEB_SEARCH', 'INSTAGRAM', 'GITHUB'],
+          candidates: [{ id: 'c1', selected: false, handles: { INSTAGRAM: 'jdoe' } }],
+        })
+      );
+      const githubTask = makeTask({ id: 't2', platform: 'GITHUB', status: 'PENDING' });
+      (txMock.sessionTask.findMany as any).mockResolvedValue([
+        makeTask({ id: 't1', platform: 'INSTAGRAM', status: 'PENDING' }),
+        githubTask,
+      ]);
+      (prisma.sessionTask.findMany as any).mockResolvedValue([
+        makeTask({ id: 't1', platform: 'INSTAGRAM', status: 'PENDING' }),
+        githubTask,
+      ]);
+      (txMock.sessionTask.findUniqueOrThrow as any).mockResolvedValue({
+        ...githubTask,
+        session: { id: 'session-1', status: 'ENRICHING', lockedAt: null },
+      });
+
+      await sessionsService.selectCandidate('session-1', 'c1', 1);
+
+      const dispatched = dispatchTasksMock.mock.calls[0][0];
+      expect(dispatched).toHaveLength(1);
+      expect(dispatched[0].platform).toBe('INSTAGRAM');
+    });
+
+    it('S38: the skipped task is written with status SKIPPED and errorCode NO_HANDLE, never claimed/charged', async () => {
+      (prisma.osintSession.findFirst as any).mockResolvedValue(
+        makeSession({
+          status: 'DISAMBIGUATION',
+          platforms: ['WEB_SEARCH', 'GITHUB'],
+          candidates: [{ id: 'c1', selected: false, handles: {} }],
+        })
+      );
+      const githubTask = makeTask({ id: 't2', platform: 'GITHUB', status: 'PENDING' });
+      (txMock.sessionTask.findMany as any).mockResolvedValue([githubTask]);
+      (prisma.sessionTask.findMany as any).mockResolvedValue([githubTask]);
+      (txMock.sessionTask.findUniqueOrThrow as any).mockResolvedValue({
+        ...githubTask,
+        session: { id: 'session-1', status: 'ENRICHING', lockedAt: null },
+      });
+
+      await sessionsService.selectCandidate('session-1', 'c1', 1);
+
+      expect(dispatchTasksMock.mock.calls.length).toBe(0);
+      const updateManyArgs = (txMock.sessionTask.updateMany as any).mock.calls.find(
+        (c: any) => c[0].where.id === 't2'
+      );
+      expect(updateManyArgs[0].where.status).toBe('PENDING');
+      expect(updateManyArgs[0].data.status).toBe('SKIPPED');
+      expect(updateManyArgs[0].data.errorCode).toBe('NO_HANDLE');
+      expect(spendSpy).not.toHaveBeenCalled();
+    });
+
+    it('S39: a candidate with no handles at all skips every scrape platform', async () => {
+      (prisma.osintSession.findFirst as any).mockResolvedValue(
+        makeSession({
+          status: 'DISAMBIGUATION',
+          platforms: ['WEB_SEARCH', 'INSTAGRAM', 'GITHUB'],
+          candidates: [{ id: 'c1', selected: false, handles: null }],
+        })
+      );
+      const tasks = [
+        makeTask({ id: 't1', platform: 'INSTAGRAM', status: 'PENDING' }),
+        makeTask({ id: 't2', platform: 'GITHUB', status: 'PENDING' }),
+      ];
+      (txMock.sessionTask.findMany as any).mockResolvedValue(tasks);
+      (prisma.sessionTask.findMany as any).mockResolvedValue(tasks);
+      (txMock.sessionTask.findUniqueOrThrow as any).mockImplementation(async (args: any) => ({
+        ...tasks.find((t) => t.id === args.where.id),
+        session: { id: 'session-1', status: 'ENRICHING', lockedAt: null },
+      }));
+
+      await sessionsService.selectCandidate('session-1', 'c1', 1);
+
+      expect(dispatchTasksMock.mock.calls.length).toBe(0);
+      const skipCalls = (txMock.sessionTask.updateMany as any).mock.calls.filter(
+        (c: any) => c[0].data.status === 'SKIPPED'
+      );
+      expect(skipCalls).toHaveLength(2);
     });
   });
 

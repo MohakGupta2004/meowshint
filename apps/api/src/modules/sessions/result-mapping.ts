@@ -21,7 +21,7 @@ export function mapResult(platform: Platform, data: Record<string, any>): Mapped
       return {
         model: 'webSearchResult',
         data: {
-          ...baseData,
+          summaryText: baseData.summaryText,
           query: data.query ?? '',
           engine: data.engine ?? null,
           totalResults: data.totalResults ?? null,

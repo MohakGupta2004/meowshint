@@ -8,10 +8,10 @@ import { clearAuthCookies, setAuthCookies, verifyAuth } from './utils';
 export const authRoutes = new Elysia({ prefix: '/auth' })
   .post(
     '/register',
-    async ({ body, set }) => {
+    async ({ body, cookie }) => {
       const input = body as RegisterInput;
       const result = await authService.register(input);
-      setAuthCookies(set, result.accessToken, result.refreshToken);
+      setAuthCookies(cookie, result.accessToken, result.refreshToken);
       return { success: true, data: result };
     },
     {
@@ -24,10 +24,10 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
   )
   .post(
     '/login',
-    async ({ body, set }) => {
+    async ({ body, cookie }) => {
       const input = body as LoginInput;
       const result = await authService.login(input);
-      setAuthCookies(set, result.accessToken, result.refreshToken);
+      setAuthCookies(cookie, result.accessToken, result.refreshToken);
       return { success: true, data: result };
     },
     {
@@ -39,10 +39,10 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
   )
   .post(
     '/refresh',
-    async ({ body, cookie, set }) => {
+    async ({ body, cookie }) => {
       const refreshToken = cookie?.refreshToken?.value || (body as any)?.refreshToken;
       const result = await authService.refresh(refreshToken);
-      setAuthCookies(set, result.accessToken, result.refreshToken);
+      setAuthCookies(cookie, result.accessToken, result.refreshToken);
       return { success: true, data: { accessToken: result.accessToken } };
     },
     {
@@ -53,10 +53,10 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
   )
   .post(
     '/logout',
-    async ({ body, cookie, set }) => {
+    async ({ body, cookie }) => {
       const refreshToken = cookie?.refreshToken?.value || (body as any)?.refreshToken;
       await authService.logout(refreshToken);
-      clearAuthCookies(set);
+      clearAuthCookies(cookie);
       return { success: true, data: { message: 'Logged out successfully' } };
     },
     {
@@ -73,12 +73,12 @@ export const authRoutes = new Elysia({ prefix: '/auth' })
   })
   .post(
     '/change-password',
-    async ({ body, cookie, headers, set }) => {
+    async ({ body, cookie, headers }) => {
       const userId = verifyAuth({ cookie, headers });
       if (userId instanceof Response) return userId;
       const input = body as ChangePasswordInput;
       const result = await authService.changePassword(userId, input);
-      clearAuthCookies(set);
+      clearAuthCookies(cookie);
       return { success: true, data: result };
     },
     {
