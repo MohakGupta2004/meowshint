@@ -1,6 +1,20 @@
 import 'dotenv/config';
 import { z } from 'zod';
 
+// Coerces "true"/"1"/true -> true, everything else (including "false") -> false.
+// z.coerce.boolean() is a footgun here: any non-empty string, including the
+// literal string "false", coerces to true.
+function booleanEnv(defaultValue: boolean) {
+  return z
+    .union([z.boolean(), z.string()])
+    .optional()
+    .transform((v) => {
+      if (v === undefined) return defaultValue;
+      if (typeof v === 'boolean') return v;
+      return v === 'true' || v === '1';
+    });
+}
+
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(3000),
@@ -15,23 +29,34 @@ const envSchema = z.object({
   JWT_REFRESH_SECRET: z.string().min(1).default('super-secret-refresh-key-change-in-production'),
   JWT_ACCESS_EXPIRES_IN: z.string().default('15m'),
   JWT_REFRESH_EXPIRES_IN: z.string().default('7d'),
-  // Scraping env vars (all optional, safe defaults)
+  // Scraping / worker env vars (all optional, safe defaults)
   GITHUB_TOKEN: z.string().optional(),
-  ENABLE_LINKEDIN_SCRAPER: z.coerce.boolean().default(false),
+  ENABLE_LINKEDIN_SCRAPER: booleanEnv(false),
   SCOUT_PROXY: z.string().optional(),
   SCOUT_PROXY_FILE: z.string().optional(),
-  SCOUT_FREE_PROXY: z.string().optional(),
+  SCOUT_FREE_PROXY: booleanEnv(false),
   SCOUT_DELAY_MIN: z.coerce.number().int().optional(),
   SCOUT_DELAY_MAX: z.coerce.number().int().optional(),
+  SCOUT_HTTP_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
+  SCOUT_MAX_CANDIDATES: z.coerce.number().int().positive().default(10),
+  // Process topology — both true by default (single deploy unit); split later
+  // by setting one false on each instance.
+  RUN_API: booleanEnv(true),
+  RUN_WORKER: booleanEnv(false),
 });
 
-const parsed = envSchema.safeParse(process.env);
+export type Env = z.infer<typeof envSchema>;
 
-if (!parsed.success) {
-  console.error('Invalid environment variables:', z.flattenError(parsed.error).fieldErrors);
-  process.exit(1);
+export function parseEnv(raw: Record<string, string | undefined>): Env {
+  const parsed = envSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new Error(
+      `Invalid environment variables: ${JSON.stringify(z.flattenError(parsed.error).fieldErrors)}`
+    );
+  }
+  return parsed.data;
 }
 
-export const env = parsed.data;
+export const env = parseEnv(process.env);
 export const isProduction = env.NODE_ENV === 'production';
 export const isTest = env.NODE_ENV === 'test';

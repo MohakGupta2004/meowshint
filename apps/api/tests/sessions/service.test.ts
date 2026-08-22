@@ -16,7 +16,7 @@ const txMock: any = {
     findMany: mock(),
     create: mock(),
   },
-  osintSession: { update: mock() },
+  osintSession: { update: mock(), create: mock() },
   webSearchResult: { create: mock() },
   instagramResult: { create: mock() },
   linkedInResult: { create: mock() },
@@ -30,6 +30,11 @@ mock.module('../../src/lib/prisma', () => {
   });
   return { prisma: prismaMock, connectDatabase: mock(), disconnectDatabase: mock() };
 });
+
+const dispatchTasksMock = mock(async () => {});
+mock.module('../../src/modules/sessions/dispatch', () => ({
+  dispatchTasks: dispatchTasksMock,
+}));
 
 // Spy on the real creditsService rather than mock.module()'ing it — a module
 // mock here is process-global and would clobber credits/service.test.ts's own
@@ -115,6 +120,7 @@ describe('sessionsService', () => {
     (prisma.$transaction as any).mockClear();
     spendSpy = spyOn(creditsService, 'spend').mockResolvedValue(undefined as any);
     refundSpy = spyOn(creditsService, 'refund').mockResolvedValue(undefined as any);
+    dispatchTasksMock.mockClear();
   });
 
   afterEach(() => {
@@ -522,6 +528,139 @@ describe('sessionsService', () => {
       await expect((sessionsService as any).failTask('task-1', 2, 'E1', 'b')).rejects.toThrow(
         NotFoundError
       );
+    });
+  });
+
+  describe('create() — WEB_SEARCH injection (S30–S32)', () => {
+    it('S30: forces WEB_SEARCH into platforms if caller omitted it', async () => {
+      (txMock.osintSession.create as any).mockResolvedValue(
+        makeSession({ platforms: ['WEB_SEARCH', 'GITHUB'], totalTasks: 1 })
+      );
+      (txMock.sessionTask.create as any).mockResolvedValue({});
+      (prisma.sessionTask.findMany as any).mockResolvedValue([]);
+
+      await sessionsService.create(7, { query: 'x', platforms: ['GITHUB'] });
+
+      const createArg = (txMock.osintSession.create as any).mock.calls[0][0];
+      expect(createArg.data.platforms).toEqual(['WEB_SEARCH', 'GITHUB']);
+      expect(createArg.data.totalTasks).toBe(1);
+      expect((txMock.sessionTask.create as any).mock.calls.length).toBe(1);
+      expect((txMock.sessionTask.create as any).mock.calls[0][0].data.platform).toBe('WEB_SEARCH');
+    });
+
+    it('S31: does not duplicate WEB_SEARCH if caller already included it', async () => {
+      (txMock.osintSession.create as any).mockResolvedValue(
+        makeSession({ platforms: ['WEB_SEARCH', 'GITHUB'], totalTasks: 1 })
+      );
+      (txMock.sessionTask.create as any).mockResolvedValue({});
+      (prisma.sessionTask.findMany as any).mockResolvedValue([]);
+
+      await sessionsService.create(7, { query: 'x', platforms: ['WEB_SEARCH', 'GITHUB'] });
+
+      const createArg = (txMock.osintSession.create as any).mock.calls[0][0];
+      expect(createArg.data.platforms).toEqual(['WEB_SEARCH', 'GITHUB']);
+    });
+
+    it('S32: dispatches after the transaction commits', async () => {
+      (txMock.osintSession.create as any).mockResolvedValue(
+        makeSession({ platforms: ['WEB_SEARCH', 'GITHUB'], totalTasks: 1 })
+      );
+      (txMock.sessionTask.create as any).mockResolvedValue({});
+      (prisma.sessionTask.findMany as any).mockResolvedValue([]);
+
+      await sessionsService.create(7, { query: 'x', platforms: ['GITHUB'] });
+
+      expect((prisma.$transaction as any).mock.calls.length).toBe(1);
+      expect(dispatchTasksMock.mock.calls.length).toBe(1);
+      expect(dispatchTasksMock.mock.calls[0][0][0].kind).toBe('WEB_SEARCH');
+      expect(dispatchTasksMock.mock.calls[0][0][0].query).toBe('x');
+    });
+  });
+
+  describe('selectCandidate() — dispatch wiring (S33–S34)', () => {
+    it('S33: createMany uses skipDuplicates:true', async () => {
+      (prisma.osintSession.findFirst as any).mockResolvedValue(
+        makeSession({
+          status: 'DISAMBIGUATION',
+          platforms: ['WEB_SEARCH', 'INSTAGRAM', 'GITHUB'],
+          candidates: [{ id: 'c1', selected: false }],
+        })
+      );
+      (txMock.sessionTask.findMany as any).mockResolvedValue([
+        makeTask({ id: 't1', platform: 'INSTAGRAM', status: 'PENDING' }),
+        makeTask({ id: 't2', platform: 'GITHUB', status: 'PENDING' }),
+      ]);
+      (prisma.sessionTask.findMany as any).mockResolvedValue([
+        makeTask({ id: 't1', platform: 'INSTAGRAM', status: 'PENDING' }),
+        makeTask({ id: 't2', platform: 'GITHUB', status: 'PENDING' }),
+      ]);
+
+      await sessionsService.selectCandidate('session-1', 'c1', 1);
+
+      const createManyArg = (txMock.sessionTask.createMany as any).mock.calls[0][0];
+      expect(createManyArg.skipDuplicates).toBe(true);
+    });
+
+    it('S34: dispatches only PENDING rows, never re-dispatches WEB_SEARCH', async () => {
+      (prisma.osintSession.findFirst as any).mockResolvedValue(
+        makeSession({
+          status: 'DISAMBIGUATION',
+          platforms: ['WEB_SEARCH', 'INSTAGRAM', 'GITHUB'],
+          candidates: [{ id: 'c1', selected: false }],
+        })
+      );
+      (txMock.sessionTask.findMany as any).mockResolvedValue([
+        makeTask({ id: 't1', platform: 'INSTAGRAM', status: 'PENDING' }),
+        makeTask({ id: 't2', platform: 'GITHUB', status: 'PENDING' }),
+      ]);
+      (prisma.sessionTask.findMany as any).mockResolvedValue([
+        makeTask({ id: 't1', platform: 'INSTAGRAM', status: 'PENDING' }),
+        makeTask({ id: 't2', platform: 'GITHUB', status: 'PENDING' }),
+      ]);
+
+      await sessionsService.selectCandidate('session-1', 'c1', 1);
+
+      expect(dispatchTasksMock.mock.calls.length).toBe(1);
+      const dispatched = dispatchTasksMock.mock.calls[0][0];
+      expect(dispatched).toHaveLength(2);
+      const platforms = dispatched.map((d: any) => d.platform ?? d.kind);
+      expect(platforms).not.toContain('WEB_SEARCH');
+      expect(platforms).toContain('INSTAGRAM');
+      expect(platforms).toContain('GITHUB');
+    });
+  });
+
+  describe('createTask() — dispatch wiring (S35–S36)', () => {
+    it('S35: increments totalTasks', async () => {
+      (prisma.osintSession.findFirst as any).mockResolvedValue(
+        makeSession({ status: 'ENRICHING', totalTasks: 3 })
+      );
+      (prisma.sessionTask.findUnique as any).mockResolvedValue(null);
+      (txMock.sessionTask.create as any).mockResolvedValue(makeTask({ platform: 'TIKTOK' }));
+
+      await sessionsService.createTask('session-1', 'TIKTOK', 1);
+
+      const sessUpdate = (txMock.osintSession.update as any).mock.calls.find(
+        (c: any) => c[0].data.totalTasks
+      );
+      expect(sessUpdate[0].data.totalTasks).toEqual({ increment: 1 });
+    });
+
+    it('S36: dispatches the new task after commit', async () => {
+      (prisma.osintSession.findFirst as any).mockResolvedValue(
+        makeSession({ status: 'ENRICHING', totalTasks: 3 })
+      );
+      (prisma.sessionTask.findUnique as any).mockResolvedValue(null);
+      (txMock.sessionTask.create as any).mockResolvedValue(
+        makeTask({ id: 'new-task', platform: 'TIKTOK' })
+      );
+
+      await sessionsService.createTask('session-1', 'TIKTOK', 1);
+
+      expect((prisma.$transaction as any).mock.calls.length).toBe(1);
+      expect(dispatchTasksMock.mock.calls.length).toBe(1);
+      expect(dispatchTasksMock.mock.calls[0][0][0].kind).toBe('SCRAPE');
+      expect(dispatchTasksMock.mock.calls[0][0][0].platform).toBe('TIKTOK');
     });
   });
 });

@@ -222,6 +222,7 @@ model SessionTask {
   queuedAt     DateTime   @default(now())
   startedAt    DateTime?
   finishedAt   DateTime?
+  chargedAt    DateTime?  // set once, same tx as the credit debit — worker charge-idempotency guard
 
   session      OsintSession       @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   webResult    WebSearchResult?
@@ -232,6 +233,7 @@ model SessionTask {
 
   @@unique([sessionId, platform])
   @@index([status])
+  @@index([status, startedAt])
 }
 
 // ---------------------------------------------------------------------------

@@ -1,7 +1,10 @@
 import { Platform, TaskStatus } from '../../../generated/prisma/client';
 import { ConflictError, NotFoundError, SessionLockedError } from '../../errors';
 import { prisma } from '../../lib/prisma';
+import type { JobData } from '../../worker/contracts';
 import { creditsService } from '../credits/service';
+import { dispatchTasks } from './dispatch';
+import { mapResult } from './result-mapping';
 
 // Type for Prisma transaction client (subset of PrismaClient)
 type TransactionClient = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
@@ -26,15 +29,51 @@ export const sessionsService = {
     agentId: number,
     data: { query: string; queryContext?: string; platforms: Platform[] }
   ) {
-    return prisma.osintSession.create({
-      data: {
-        agentId,
-        query: data.query.trim(),
-        queryContext: data.queryContext?.trim() ?? null,
-        platforms: data.platforms,
-      },
-      include: { candidates: true },
+    // S30/S31: force WEB_SEARCH into platforms (dedup, first)
+    const platforms = [
+      'WEB_SEARCH' as Platform,
+      ...data.platforms.filter((p) => p !== 'WEB_SEARCH'),
+    ];
+
+    const session = await prisma.$transaction(async (tx) => {
+      const sess = await tx.osintSession.create({
+        data: {
+          agentId,
+          query: data.query.trim(),
+          queryContext: data.queryContext?.trim() ?? null,
+          platforms,
+          totalTasks: 1,
+        },
+        include: { candidates: true },
+      });
+
+      // Create the WEB_SEARCH task row
+      await tx.sessionTask.create({
+        data: {
+          sessionId: sess.id,
+          platform: 'WEB_SEARCH',
+          status: 'PENDING',
+        },
+      });
+
+      return sess;
     });
+
+    // S32: dispatch after the transaction commits
+    await dispatchTasks([
+      {
+        schemaVersion: 1,
+        sessionId: session.id,
+        taskId: `web-search-${session.id}`,
+        agentId,
+        enqueuedAt: new Date().toISOString(),
+        kind: 'WEB_SEARCH',
+        query: data.query.trim(),
+        queryContext: data.queryContext?.trim(),
+      },
+    ]);
+
+    return session;
   },
 
   // Get a single session by ID — verifies the agent owns it
@@ -90,31 +129,55 @@ export const sessionsService = {
     const candidate = session.candidates.find((c) => c.id === candidateId);
     if (!candidate) throw new NotFoundError('Candidate not found in this session');
 
-    return prisma.$transaction(async (tx) => {
-      // Mark the selected candidate
-      await tx.candidate.update({
-        where: { id: candidateId },
-        data: { selected: true },
-      });
+    return prisma
+      .$transaction(async (tx) => {
+        // Mark the selected candidate
+        await tx.candidate.update({
+          where: { id: candidateId },
+          data: { selected: true },
+        });
 
-      // Create task rows for each requested platform
-      const taskData = session.platforms.map((platform) => ({
-        sessionId,
-        platform,
-        status: 'PENDING' as TaskStatus,
-      }));
-      await tx.sessionTask.createMany({ data: taskData });
+        // Create task rows for each requested platform
+        const taskData = session.platforms.map((platform) => ({
+          sessionId,
+          platform,
+          status: 'PENDING' as TaskStatus,
+        }));
+        await tx.sessionTask.createMany({ data: taskData, skipDuplicates: true });
 
-      // Transition session to ENRICHING and set task count
-      return tx.osintSession.update({
-        where: { id: sessionId },
-        data: {
-          status: 'ENRICHING',
-          selectedCandidateId: candidateId,
-          totalTasks: session.platforms.length,
-        },
+        // Transition session to ENRICHING and set task count
+        const updated = await tx.osintSession.update({
+          where: { id: sessionId },
+          data: {
+            status: 'ENRICHING',
+            selectedCandidateId: candidateId,
+            totalTasks: session.platforms.length,
+          },
+        });
+
+        return updated;
+      })
+      .then(async (updated) => {
+        // S34: dispatch only PENDING, non-WEB_SEARCH rows after commit
+        const tasks =
+          (await prisma.sessionTask.findMany({
+            where: { sessionId, status: 'PENDING', platform: { not: 'WEB_SEARCH' } },
+          })) ?? [];
+        if (tasks.length > 0) {
+          const jobData: JobData[] = tasks.map((t) => ({
+            schemaVersion: 1,
+            sessionId: t.sessionId,
+            taskId: t.id,
+            agentId,
+            enqueuedAt: new Date().toISOString(),
+            kind: 'SCRAPE' as const,
+            platform: t.platform as any,
+            target: { displayName: session.query },
+          }));
+          await dispatchTasks(jobData);
+        }
+        return updated;
       });
-    });
   },
 
   // Create a task row for a single platform (used when adding tasks dynamically)
@@ -132,9 +195,33 @@ export const sessionsService = {
     });
     if (existing) throw new ConflictError(`Task for ${platform} already exists`);
 
-    return prisma.sessionTask.create({
-      data: { sessionId, platform },
+    const task = await prisma.$transaction(async (tx) => {
+      const t = await tx.sessionTask.create({
+        data: { sessionId, platform },
+      });
+      // S35: increment totalTasks
+      await tx.osintSession.update({
+        where: { id: sessionId },
+        data: { totalTasks: { increment: 1 } },
+      });
+      return t;
     });
+
+    // S36: dispatch after commit
+    await dispatchTasks([
+      {
+        schemaVersion: 1,
+        sessionId,
+        taskId: task.id,
+        agentId,
+        enqueuedAt: new Date().toISOString(),
+        kind: 'SCRAPE',
+        platform: platform as any,
+        target: { displayName: session.query },
+      },
+    ]);
+
+    return task;
   },
 
   // Mark a task as RUNNING — records start time and charges credits
@@ -314,74 +401,8 @@ export const sessionsService = {
     platform: Platform,
     data: Record<string, any>
   ) {
-    const baseData = { taskId, summaryText: data.summaryText ?? null, raw: data.raw ?? null };
-
-    switch (platform) {
-      case 'WEB_SEARCH':
-        return tx.webSearchResult.create({
-          data: {
-            ...baseData,
-            query: data.query ?? '',
-            engine: data.engine ?? null,
-            totalResults: data.totalResults ?? null,
-            results: data.results ?? [],
-            discoveredHandles: data.discoveredHandles ?? null,
-          },
-        });
-      case 'INSTAGRAM':
-        return tx.instagramResult.create({
-          data: {
-            ...baseData,
-            username: data.username ?? '',
-            fullName: data.fullName ?? null,
-            biography: data.biography ?? null,
-            followers: data.followers ?? null,
-            following: data.following ?? null,
-            postCount: data.postCount ?? null,
-            isPrivate: data.isPrivate ?? false,
-            isVerified: data.isVerified ?? false,
-            avatarUrl: data.avatarUrl ?? null,
-            externalUrl: data.externalUrl ?? null,
-            extractedEmails: data.extractedEmails ?? [],
-            extractedPhones: data.extractedPhones ?? [],
-          },
-        });
-      case 'LINKEDIN':
-        return tx.linkedInResult.create({
-          data: {
-            ...baseData,
-            publicId: data.publicId ?? '',
-            fullName: data.fullName ?? null,
-            headline: data.headline ?? null,
-            currentCompany: data.currentCompany ?? null,
-            currentTitle: data.currentTitle ?? null,
-            location: data.location ?? null,
-            about: data.about ?? null,
-            experience: data.experience ?? null,
-            education: data.education ?? null,
-            skills: data.skills ?? [],
-            connections: data.connections ?? null,
-            avatarUrl: data.avatarUrl ?? null,
-          },
-        });
-      default:
-        // GITHUB, TWITCH, YOUTUBE, TIKTOK, PINTEREST, LINKTREE
-        return tx.socialProfileResult.create({
-          data: {
-            ...baseData,
-            platform,
-            username: data.username ?? '',
-            displayName: data.displayName ?? null,
-            bio: data.bio ?? null,
-            followers: data.followers ?? null,
-            following: data.following ?? null,
-            itemCount: data.itemCount ?? null,
-            avatarUrl: data.avatarUrl ?? null,
-            profileUrl: data.profileUrl ?? null,
-            socials: data.socials ?? null,
-          },
-        });
-    }
+    const { model, data: fields } = mapResult(platform, data);
+    return (tx as any)[model].create({ data: { taskId, ...fields } });
   },
 
   // Check if all tasks in a session are done and update status accordingly

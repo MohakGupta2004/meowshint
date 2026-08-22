@@ -1,0 +1,18 @@
+{
+  "data": {
+    "user": {
+      "username": "octocat_ig",
+      "full_name": "The Octocat",
+      "biography": "email me at jane@x.com",
+      "is_private": false,
+      "is_verified": true,
+      "profile_pic_url_hd": "https://example.com/pic_hd.jpg",
+      "profile_pic_url": "https://example.com/pic.jpg",
+      "external_url": "https://octocat.example.com",
+      "edge_followed_by": { "count": 1234 },
+      "edge_follow": { "count": 567 },
+      "edge_owner_to_timeline_media": { "count": 89 },
+      "bio_links": [{ "url": "https://octocat.example.com" }]
+    }
+  }
+}

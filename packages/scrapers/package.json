@@ -1,0 +1,26 @@
+{
+  "name": "@repo/scrapers",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./errors": "./src/errors.ts",
+    "./types": "./src/types.ts"
+  },
+  "scripts": {
+    "build": "echo noop",
+    "check-types": "tsc --noEmit",
+    "lint": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@repo/eslint-config": "workspace:*",
+    "@types/bun": "latest",
+    "@types/node": "^26.1.2",
+    "typescript": "5.9.2"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  }
+}

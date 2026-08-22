@@ -1,0 +1,15 @@
+{
+  "login": "octocat",
+  "name": "The Octocat",
+  "bio": "contact me: jane@example.com",
+  "followers": 12345,
+  "following": 9,
+  "public_repos": 8,
+  "avatar_url": "https://avatars.githubusercontent.com/u/583231?v=4",
+  "html_url": "https://github.com/octocat",
+  "blog": "https://github.blog",
+  "twitter_username": "octocat",
+  "company": "@github",
+  "location": "San Francisco",
+  "email": null
+}
